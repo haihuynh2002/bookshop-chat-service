@@ -1,0 +1,1 @@
+# bookshop-chat-service
