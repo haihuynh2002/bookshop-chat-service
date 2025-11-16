@@ -1,0 +1,40 @@
+server:
+  port: 9010
+  shutdown: graceful
+  netty:
+    connection-timeout: 2s
+    http:
+      max-initial-line-length: 65536
+      max-header-size: 65536
+
+spring:
+  application:
+    name: chat-service
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/PolarBookshop
+  lifecycle:
+    timeout-per-shutdown-phase: 15s
+  r2dbc:
+    username: user
+    password: password
+    url: r2dbc:postgresql://localhost:5432/bookshopdb_chat
+    pool:
+      max-create-connection-time: 2s
+      initial-size: 5
+      max-size: 10
+  flyway:
+    user: ${spring.r2dbc.username}
+    password: ${spring.r2dbc.password}
+    url: jdbc:postgresql://localhost:5432/bookshopdb_chat
+
+  webflux:
+    codec:
+      max-in-memory-size: 10MB
+
+websocket:
+  max-session-idle-timeout: 3600000
+  max-text-message-buffer-size: 8192
+  max-binary-message-buffer-size: 8192

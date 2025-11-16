@@ -1,0 +1,10 @@
+spring:
+  flyway:
+    url: jdbc:postgresql://bookshop-postgres/bookshopdb_chat
+  r2dbc:
+    url: r2dbc:postgresql://bookshop-postgres/bookshopdb_chat
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://bookshop-keycloak/realms/PolarBookshop
