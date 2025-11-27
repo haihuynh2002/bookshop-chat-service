@@ -4,6 +4,7 @@ import com.bookshop.chat_service.chat.domain.ChatMessage;
 import com.bookshop.chat_service.chat.domain.ChatRoomStatus;
 import com.bookshop.chat_service.chat.domain.ChatService;
 import com.bookshop.chat_service.chat.domain.MessageType;
+import com.bookshop.chat_service.chat.web.ChatRoomUpdateRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +12,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
@@ -59,30 +61,60 @@ public class ChatWebSocketHandler implements WebSocketHandler {
     }
 
     private Mono<Void> processMessage(WebSocketMessage message, WebSocketSession session, String userId) {
-        if(chatService.getChatRoom(message.getRoomId()).equals(ChatRoomStatus.CLOSED)) {
-            return Mono.empty();
-        }
+        return chatService.getChatRoom(message.getRoomId())
+                .flatMap(chatRoom -> {
+                    if (ChatRoomStatus.CLOSED.equals(chatRoom.getStatus())) {
+                        log.info("Room {} is CLOSED for user {}", message.getRoomId(), userId);
+                        return processClose(message, session, userId);
+                    }
 
-        try {
-            switch (message.getType()) {
-                case "SEND_MESSAGE":
-                    return processSendMessage(message, userId);
-                case "TYPING":
-                    return processTyping(message, userId);
-                case "STOP_TYPING":
-                    return processStopTyping(message, userId);
-//                case "READ_RECEIPT":
-//                    return processReadReceipt(message, userId);
-//                case "PING":
-//                    return processPing(message, session, userId);
-                default:
-                    return Mono.empty();
-            }
-        } catch (Exception e) {
-            log.error("Error processing message type {} from user {}: {}",
-                    message.getType(), userId, e.getMessage(), e);
-            return Mono.empty();
-        }
+                    try {
+                        switch (message.getType()) {
+                            case "SEND_MESSAGE":
+                                return processSendMessage(message, userId);
+                            case "TYPING":
+                                return processTyping(message, userId);
+                            case "STOP_TYPING":
+                                return processStopTyping(message, userId);
+                            case "ROOM_CLOSE":
+                                return processClose(message, session, userId);
+                            default:
+                                return Mono.empty();
+                        }
+                    } catch (Exception e) {
+                        log.error("Error processing message type {} from user {}: {}",
+                                message.getType(), userId, e.getMessage(), e);
+                        return Mono.empty();
+                    }
+                })
+                .onErrorResume(e -> {
+                    log.error("Error checking room status for room {}: {}",
+                            message.getRoomId(), e.getMessage(), e);
+                    return session.close(CloseStatus.SERVER_ERROR.withReason("Error checking room status"));
+                });
+    }
+
+
+    private Mono<Void> processClose(WebSocketMessage message, WebSocketSession session, String userId) {
+        Long roomId = message.getRoomId();
+
+        ChatRoomUpdateRequest request = new ChatRoomUpdateRequest();
+        request.setStatus(ChatRoomStatus.CLOSED);
+
+        WebSocketMessage closeMessage = new WebSocketMessage();
+        closeMessage.setType("ROOM_CLOSE");
+        closeMessage.setRoomId(roomId);
+        closeMessage.setSenderId(userId);
+        closeMessage.setSenderType(message.getSenderType());
+        closeMessage.setIsTyping(true);
+        closeMessage.setTypingUserId(userId);
+        closeMessage.setTimestamp(Instant.now());
+
+        return chatService.updateRoom(roomId, request)
+                .then(broadcastToRoomParticipants(roomId, closeMessage))
+                .doOnSuccess(v -> log.debug("Room {} is  close", roomId))
+                .then(session.close(CloseStatus.NORMAL))
+                .then(Mono.never());
     }
 
     private Mono<Void> processTyping(WebSocketMessage message, String userId) {
@@ -140,7 +172,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         try {
             ChatMessage chatMessage = new ChatMessage();
             chatMessage.setRoomId(message.getRoomId());
-            chatMessage.setSenderId(userId); // Use the userId from session, not from message
+            chatMessage.setSenderId(userId);
             chatMessage.setSenderType(message.getSenderType());
             chatMessage.setContent(message.getContent().trim());
             chatMessage.setMessageType(MessageType.TEXT);
